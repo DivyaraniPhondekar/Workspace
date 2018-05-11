@@ -1,2 +1,1 @@
-# Workspace
-small python codes
+Work done at Quantiphi office 
