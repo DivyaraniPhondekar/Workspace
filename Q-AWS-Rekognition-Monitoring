@@ -1,0 +1,188 @@
+import boto3
+import smtplib
+from email.mime.text import MIMEText
+from botocore.exceptions import ClientError
+from email.mime.multipart import MIMEMultipart
+import datetime
+from datetime import datetime, timedelta
+from smtplib import SMTPException
+from time import sleep
+import time
+from dateutil.tz import tzutc, tzlocal
+from collections import Counter
+
+def get_secret():
+    secret_name = "devops/prod"
+    endpoint_url = "https://secretsmanager.us-east-1.amazonaws.com"
+    region_name = "us-east-1"
+
+    session = boto3.session.Session()
+    client = session.client(
+        service_name='secretsmanager',
+        region_name=region_name,
+        endpoint_url=endpoint_url
+    )
+    try:
+        
+        get_secret_value_response = client.get_secret_value(SecretId=secret_name)
+
+        
+    except ClientError as e:
+        if e.response['Error']['Code'] == 'ResourceNotFoundException':
+            print("The requested secret " + secret_name + " was not found")
+        elif e.response['Error']['Code'] == 'InvalidRequestException':
+            print("The request was invalid due to:", e)
+        elif e.response['Error']['Code'] == 'InvalidParameterException':
+            print("The request had invalid params:", e)
+    else:
+        # Decrypted secret using the associated KMS CMK
+        # Depending on whether the secret was a string or binary, one of these fields will be populated
+        if 'SecretString' in get_secret_value_response:
+            secret = get_secret_value_response['SecretString']
+            return secret
+        else:
+            binary_secret_data = get_secret_value_response['SecretBinary']
+
+
+def lambda_handler(event, context):
+    #--fetch time-----------------------------------------------------------------------------------------------
+    ts = int(time.time())+19800
+    st = datetime.fromtimestamp(ts).strftime('%Y/%m/%d %H:%M:%S')
+    
+    endtime=datetime.fromtimestamp(ts).strftime('%Y/%m/%d')
+    start=ts-86400
+    starttime = datetime.fromtimestamp(start).strftime('%Y/%m/%d')
+    #--fetch information of created cluster---------------------------------------------------------------------
+    pwd=get_secret()
+    i=eval(pwd)
+    password=i.get("devops@quantiphi.com")
+    client1 = boto3.client('cloudtrail')
+    client2 = boto3.client('ec2')
+    count = 1
+    usernamelist = []
+
+    eventList = ["CreateCollection","DeleteCollection","CreateStreamProcessor","DeleteStreamProcessor","DescribeStreamProcessor","ListStreamProcessors","ListCollections"]
+    try:
+        for k in eventList:
+            response = client1.lookup_events(
+            LookupAttributes=[
+                {
+                    'AttributeKey': 'EventName',
+                    'AttributeValue': 'CreateCollection'
+                }
+            ],
+            StartTime=starttime,
+            EndTime=endtime
+            )
+            print k
+            print response
+            for i in range(len(response['Events'])):
+                
+                response1 = client2.describe_instances(Filters=[{
+                    'Name': 'instance-id',
+                    'Values': [
+                        response['Events'][i]['Username'],
+                    ]}])
+                for j in response1['Reservations'][0]['Instances'][0]['Tags']:
+                    if j['Key']=='Email':
+                        print count , j['Value']
+                        usernamelist.append(j['Value'])
+                count=count+1
+    except Exception as e:
+        print e
+
+    t=Counter(usernamelist)
+    u=dict(t)
+
+    for key, value in u.iteritems():
+        print key,value
+        
+    
+        #--send email to person who have created cluster--------------------------------------------------------------------------------------------
+        server = smtplib.SMTP('smtp.gmail.com', 587)
+        server.starttls()
+        server.login('devops@quantiphi.com',password)
+        
+        record='''
+            <tr style="text-align:center">
+            <td colspan= "1" style="padding:10px;text-align:left;border-collapse:collapse;border:lightblue solid thin"><p style="color: black;">{}</p></td>
+            <td colspan= "1" style="padding:10px;text-align:left;border-collapse:collapse;border:lightblue solid thin"><p style="color: black;">{}</p></td>
+            <td style="padding:10px;text-align:left;border-collapse:collapse;border:lightblue solid thin"><p style="color: black;">{}</p></td>
+            <td style="padding:10px;text-align:left;border-collapse:collapse;border:lightblue solid thin"><p style="color: black;">{}</p></td>
+            </tr>'''.format('AWS','Rekognition',key,value)
+        html = """\
+                <!DOCTYPE html>
+                
+    <html lang="en">
+                  
+    <head>
+                  
+                  
+    <meta charset="utf-8">
+                  
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+                  
+    <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.7/css/bootstrap.min.css">
+                  
+    
+    <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.3.1/jquery.min.js"></script>
+                  
+    
+    <script src="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.7/js/bootstrap.min.js"></script>
+                  
+    
+    </head>
+    
+    <body>
+    
+    Hello,<br/>
+    <br/>
+    AWS Rekognition API hit count information is given below, Hit Count is recorded for a today's day.<br/>
+    Rekognition service is expensive, so use it carefully as the respective usage cost will be added in your project.
+    <br/>
+    <br/>
+    Feel free to reach DevOps.<br/>
+    
+    <br/>
+    
+    </font><br/>	
+    
+    ------------------------------------------------------------------------<br/>
+    <h2>Resource Info</h2><br/>
+    
+    <div class="container">
+                  
+    
+    <table class="table table-condensed">
+                  
+    <thead> 
+    
+                  
+    <tr style="background:lightblue;color:black"> 
+    <th rowspan="4" style="padding:10px;text-align:center;border-collapse:collapse;border:lightblue solid thin">Account</th> 		  
+    <th rowspan="4" style="padding:10px;text-align:center;border-collapse:collapse;border:lightblue solid thin">Service/Zone</th> 
+    <th rowspan="4" style="padding:10px;text-align:center;border-collapse:collapse;border:lightblue solid thin">Email</th> 			 
+    <th rowspan="4" style="padding:10px;text-align:center;border-collapse:collapse;border:lightblue solid thin">API Use Count</th> 
+                 
+    </tr>
+    </tr>
+    </thead>
+    <tbody>
+    {}		 
+    </tbody>
+    </table>
+    </div>
+    </body>
+    </html>""".format(record)
+    
+        msg = MIMEMultipart('alternative')
+        msg['Subject'] = "AWS Rekognition Monitoring"+st+""
+        msg['To'] = key
+        part2 = MIMEText(html, 'html')
+        msg.attach(part2)
+        server.sendmail("devops@quantiphi.com",msg['To'], msg.as_string())
+        server.quit()
+
+    
+    return 'Hello from Lambda'
+    
